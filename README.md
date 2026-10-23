@@ -32,6 +32,12 @@ Two integration mechanisms (both documented in [UPDATING.md](UPDATING.md)):
 - **URL params** (WordCraft, DeckCraft): a small fork patch adds `?src=`/`?save=`/`?user=`
   so the editor fetches the file and `PUT`s it back over WebDAV itself (CSRF‑protected).
 
+**DirectEditing** (since 1.3.0): the app also registers as a Nextcloud **editor** via the
+`DirectEditing` API (`lib/DirectEditing/ArtCraftEditor.php`), so the **mobile/desktop clients**
+and "Open with" offer ArtCraft for docx/xlsx/pptx (pdf optional), with four "New document"
+creators. `open(token)` renders a full‑page host (`templates/directedit.php` +
+`js/wordcraft-directedit.mjs`) that embeds the matching editor for the token's file.
+
 Saving writes the file back via `remote.php/dav` with the session's `requesttoken`.
 Recovery relies on Nextcloud's built‑in **file versions** (`files_versions`), which snapshot
 every save.
