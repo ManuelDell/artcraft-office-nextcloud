@@ -29,6 +29,7 @@ await esbuild.build({
     conditions: ['browser', 'import', 'default'],
     mainFields: ['browser', 'module', 'main'],
     legalComments: 'none',
+    loader: { '.b64': 'text' },
     plugins: [stubNodeBuiltins],
     define: { 'process.env.NODE_ENV': '"production"' },
 })
