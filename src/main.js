@@ -3,12 +3,14 @@ import { getCurrentUser } from '@nextcloud/auth'
 import BLANK_DOCX_B64 from './blank-docx.b64'
 import BLANK_XLSX_B64 from './blank-xlsx.b64'
 import BLANK_PPTX_B64 from './blank-pptx.b64'
+import BLANK_PDF_B64 from './blank-pdf.b64'
 
 console.info('[wordcraft] script loaded')
 
 const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
 const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 const PPTX = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+const PDF = 'application/pdf'
 const OVERLAY_ID = 'wordcraft-overlay'
 // Editors are bundled inside this app and served from its own web root (self-contained).
 const EDITORS = ((window.OC && window.OC.appswebroots && window.OC.appswebroots.wordcraft) || '/apps/wordcraft') + '/editors'
@@ -47,6 +49,13 @@ const LOGO_DC = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">'
     + '<line x1="150" y1="222" x2="362" y2="222"/><line x1="150" y1="268" x2="330" y2="268"/></g>'
     + '<line x1="256" y1="320" x2="256" y2="366" stroke="#0b0b0c" stroke-width="14"/>'
     + '<path d="M190 404 H322 L302 366 H210 Z" fill="#0b0b0c"/></svg>'
+
+// PdfCraft brand mark (teal document).
+const LOGO_PDF = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">'
+    + '<rect width="512" height="512" rx="112" fill="#12a58a"/>'
+    + '<path d="M150 80 H320 L392 152 V432 H150 Z" fill="#efe9dc" stroke="#0b0b0c" stroke-width="14" stroke-linejoin="round"/>'
+    + '<path d="M320 80 V152 H392" fill="none" stroke="#0b0b0c" stroke-width="14" stroke-linejoin="round"/>'
+    + '<text x="270" y="344" font-family="system-ui, sans-serif" font-size="92" font-weight="700" text-anchor="middle" fill="#12a58a">PDF</text></svg>'
 
 const matches = (node, mime, ext) => {
     if (!node) { return false }
@@ -141,46 +150,51 @@ function openUrlEditor(base, dav, name) {
 const openWord = (dav, name) => openUrlEditor(EDITORS + '/wordcraft', dav, name)
 const openDeck = (dav, name) => openUrlEditor(EDITORS + '/deckcraft', dav, name)
 
-// --- GridCraft (xlsx): postMessage bridge (?host=parent) ---
-function openGrid(dav, name) {
-    openOverlay(EDITORS + '/gridcraft/?host=parent', (iframe) => {
+// --- Bridge mode (GridCraft/PdfCraft): postMessage `?host=parent` ---
+function openBridge(appPath, prefix, dav, name, mime) {
+    openOverlay(EDITORS + '/' + appPath + '/?host=parent', (iframe) => {
         const onMsg = async (e) => {
             if (e.origin !== location.origin || e.source !== iframe.contentWindow) { return }
             const d = e.data || {}
-            if (d.type === 'gridcraft:ready') {
+            if (d.type === prefix + ':ready') {
                 try {
                     const buf = await fetchArrayBuffer(dav)
-                    iframe.contentWindow.postMessage({ type: 'gridcraft:open', name, bytes: buf }, location.origin, [buf])
-                } catch (err) { console.error('[wordcraft] gridcraft open failed', err) }
-            } else if (d.type === 'gridcraft:save') {
-                try { await putBytes(dav, d.bytes, XLSX) } catch (err) { console.error('[wordcraft] gridcraft save failed', err) }
+                    iframe.contentWindow.postMessage({ type: prefix + ':open', name, bytes: buf }, location.origin, [buf])
+                } catch (err) { console.error('[wordcraft] ' + prefix + ' open failed', err) }
+            } else if (d.type === prefix + ':save') {
+                try { await putBytes(dav, d.bytes, mime) } catch (err) { console.error('[wordcraft] ' + prefix + ' save failed', err) }
             }
         }
         window.addEventListener('message', onMsg)
         return () => window.removeEventListener('message', onMsg)
     })
 }
+const openGrid = (dav, name) => openBridge('gridcraft', 'gridcraft', dav, name, XLSX)
+const openPdf = (dav, name) => openBridge('pdfcraft', 'pdfcraft', dav, name, PDF)
 
 // --- file actions (default on click, brand logo) ---
-function action(id, title, logo, mime, ext, open) {
+function action(id, title, logo, mime, ext, open, isDefault = true) {
     try {
-        registerFileAction({
+        const a = {
             id,
             displayName: () => title,
             iconSvgInline: () => logo,
             enabled: (ctx) => ctx.nodes.length === 1 && matches(ctx.nodes[0], mime, ext),
-            default: DefaultType.DEFAULT,
             async exec(ctx) {
                 try { const n = ctx.nodes[0]; open(davOf(n), n.basename); return true }
                 catch (e) { console.error('[wordcraft] open failed', e); return false }
             },
             order: 10,
-        })
+        }
+        if (isDefault) { a.default = DefaultType.DEFAULT }
+        registerFileAction(a)
     } catch (e) { console.error('[wordcraft] registerFileAction failed', id, e) }
 }
 action('wordcraft-open', 'In WordCraft öffnen', LOGO_WC, DOCX, 'docx', openWord)
 action('gridcraft-open', 'In GridCraft öffnen', LOGO_GC, XLSX, 'xlsx', openGrid)
 action('deckcraft-open', 'In DeckCraft öffnen', LOGO_DC, PPTX, 'pptx', openDeck)
+// PDF: menu action only (not default-click), so the built-in NC PDF viewer stays the default.
+action('pdfcraft-open', 'In PdfCraft bearbeiten', LOGO_PDF, PDF, 'pdf', openPdf, false)
 
 // --- "+ New" entries ---
 async function createAndOpen(folder, ext, mime, b64, open) {
@@ -204,5 +218,6 @@ function newEntry(id, title, logo, ext, mime, b64, open) {
 newEntry('wordcraft-new', 'WordCraft-Dokument', LOGO_WC, 'docx', DOCX, BLANK_DOCX_B64, openWord)
 newEntry('gridcraft-new', 'GridCraft-Tabelle', LOGO_GC, 'xlsx', XLSX, BLANK_XLSX_B64, openGrid)
 newEntry('deckcraft-new', 'DeckCraft-Präsentation', LOGO_DC, 'pptx', PPTX, BLANK_PPTX_B64, openDeck)
+newEntry('pdfcraft-new', 'PDF-Dokument (PdfCraft)', LOGO_PDF, 'pdf', PDF, BLANK_PDF_B64, openPdf)
 
-console.info('[wordcraft] registered word + grid + deck (actions + new menu)')
+console.info('[wordcraft] registered word + grid + deck + pdf (actions + new menu)')
