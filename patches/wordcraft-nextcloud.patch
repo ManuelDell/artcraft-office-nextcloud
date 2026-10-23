@@ -1,0 +1,203 @@
+diff --git a/apps/wordcraft-web/Cargo.toml b/apps/wordcraft-web/Cargo.toml
+index 9152db3..b1b41b7 100644
+--- a/apps/wordcraft-web/Cargo.toml
++++ b/apps/wordcraft-web/Cargo.toml
+@@ -29,4 +29,4 @@ rfd = { workspace = true }
+ wasm-bindgen = "0.2"
+ wasm-bindgen-futures = "0.4"
+ js-sys = "0.3"
+-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "HtmlAnchorElement", "HtmlIFrameElement", "Blob", "BlobPropertyBag", "Url", "Location", "CssStyleDeclaration", "Event", "EventTarget", "BeforeUnloadEvent", "ClipboardEvent", "DataTransfer", "FileList", "File", "DomStringList", "IdbFactory", "IdbOpenDbRequest", "IdbRequest", "IdbDatabase", "IdbObjectStore", "IdbTransaction", "IdbTransactionMode", "MediaQueryList", "Storage"] }
++web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "HtmlAnchorElement", "HtmlIFrameElement", "Blob", "BlobPropertyBag", "Url", "Location", "CssStyleDeclaration", "Event", "EventTarget", "BeforeUnloadEvent", "ClipboardEvent", "DataTransfer", "FileList", "File", "DomStringList", "IdbFactory", "IdbOpenDbRequest", "IdbRequest", "IdbDatabase", "IdbObjectStore", "IdbTransaction", "IdbTransactionMode", "MediaQueryList", "Storage", "Request", "RequestInit", "RequestCredentials", "Response", "Headers"] }
+diff --git a/apps/wordcraft-web/index.html b/apps/wordcraft-web/index.html
+index ca6ad46..dac319d 100644
+--- a/apps/wordcraft-web/index.html
++++ b/apps/wordcraft-web/index.html
+@@ -11,10 +11,26 @@
+     #wordcraft_canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+     #wordcraft_loading { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+       color: #555; font: 14px system-ui, sans-serif; pointer-events: none; }
++    #wordcraft_loading .wc-brand { font-weight: 600; font-size: 15px; color: #3B5BDB; letter-spacing: .2px; }
++    #wordcraft_loading .wc-sub { margin-top: 4px; }
++    #wc_bar { width: 260px; max-width: 70vw; height: 6px; margin-top: 14px; background: #d6d6d6; border-radius: 999px; overflow: hidden; }
++    #wc_bar::before { content: ""; display: block; height: 100%; width: 40%; border-radius: 999px; background: #3B5BDB; animation: wc-slide 1.1s ease-in-out infinite; }
++    @keyframes wc-slide { 0% { transform: translateX(-110%); } 100% { transform: translateX(275%); } }
++    #wordcraft_loading .wc-hint { margin-top: 10px; font-size: 12px; color: #8a8a8a; }
++    @media (prefers-color-scheme: dark) {
++      html, body { background: #1e1e1e; }
++      #wordcraft_loading { color: #bbb; }
++      #wc_bar { background: #3a3a3a; }
++    }
+   </style>
+ </head>
+ <body>
+   <canvas id="wordcraft_canvas"></canvas>
+-  <div id="wordcraft_loading">Loading WordCraft&hellip;</div>
++  <div id="wordcraft_loading">
++    <div class="wc-brand">WordCraft</div>
++    <div class="wc-sub">L&auml;dt&hellip;</div>
++    <div id="wc_bar"></div>
++    <div class="wc-hint">Erstes Laden kann kurz dauern &ndash; danach aus dem Cache.</div>
++  </div>
+ </body>
+ </html>
+diff --git a/apps/wordcraft-web/src/web.rs b/apps/wordcraft-web/src/web.rs
+index b2e698c..997fd1a 100644
+--- a/apps/wordcraft-web/src/web.rs
++++ b/apps/wordcraft-web/src/web.rs
+@@ -49,6 +49,22 @@ pub fn start() {
+                     // Fonts the user added on an earlier visit (#582); the app notices them arrive.
+                     font_store::load_all(cc.egui_ctx.clone());
+                     let inbox: Inbox = Inbox::default();
++                    // Nextcloud: ?src=<url> loads a document over the network into the same inbox a
++                    // dropped file uses, so the engine opens it exactly like a drop (#wc-nextcloud).
++                    if let Some(src) = query_param("src") {
++                        let inbox = inbox.clone();
++                        let ctx = cc.egui_ctx.clone();
++                        let name_hint = query_param("name");
++                        wasm_bindgen_futures::spawn_local(async move {
++                            match fetch_doc(&src, name_hint).await {
++                                Ok((name, bytes)) => {
++                                    inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
++                                    ctx.request_repaint();
++                                }
++                                Err(e) => log::error!("?src load failed: {e}"),
++                            }
++                        });
++                    }
+                     let pasted: Inbox = Inbox::default();
+                     if let Err(e) = listen_for_pasted_pictures(pasted.clone(), cc.egui_ctx.clone()) {
+                         log::error!("pasting pictures is unavailable: {e}");
+@@ -68,6 +84,14 @@ pub fn start() {
+                     // Preferences from an earlier visit (#2132), as the desktop app reads `ui.json`.
+                     let stored = stored_prefs();
+                     crate::prefs::restore(&mut app, stored.as_deref());
++                    // Nextcloud: show the signed-in user's name/initials in the account badge
++                    // and attribute edits/comments to them.
++                    if let Some(u) = query_param("user") {
++                        app.session.author = u;
++                    }
++                    if let Some(i) = query_param("initials") {
++                        app.session.initials = i;
++                    }
+                     // A region chosen in File › Options replaces the browser's for the first blank
+                     // document too (#838).
+                     if !sample && app.session.prefs.region.is_some() {
+@@ -211,6 +235,8 @@ fn services(inbox: Inbox, ctx: egui::Context, dirty: Rc<Cell<bool>>, saves: Asyn
+     let save_ctx = ctx.clone();
+     let font_ctx = ctx.clone();
+     let font_messages = messages.clone();
++    let save_url = query_param("save");
++    let src_name = query_param("name");
+     Services {
+         open_async: Some(Box::new(move |purpose: &str| {
+             let inbox = open_inbox.clone();
+@@ -246,7 +272,18 @@ fn services(inbox: Inbox, ctx: egui::Context, dirty: Rc<Cell<bool>>, saves: Asyn
+         // Exports ask for a name; the browser decides where the download goes.
+         pick_save: Some(Box::new(|name: &str| Some(name.to_string()))),
+         async_saves: Some(saves.clone()),
+-        download: Some(Box::new(move |path: &str, bytes: &[u8]| download(&saves, &save_ctx, path, bytes))),
++        download: Some(Box::new(move |path: &str, bytes: &[u8]| {
++            // Nextcloud: the primary Save (same filename as the opened doc) writes back over WebDAV;
++            // exports to another name/format keep the normal browser download.
++            let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
++            if let Some(url) = &save_url
++                && src_name.as_deref() == Some(name.as_str())
++            {
++                put_back(url, bytes);
++                return Ok(());
++            }
++            download(&saves, &save_ctx, path, bytes)
++        })),
+         print: Some(Box::new(print_pdf)),
+         inbox: Some(inbox),
+         on_dirty: Some(Box::new(move |d| dirty.set(d))),
+@@ -621,3 +658,89 @@ fn mime_for(name: &str) -> &'static str {
+         _ => "application/octet-stream",
+     }
+ }
++
++
++/// A single query-string parameter from the page URL, URL-decoded (`?key=value`, first match).
++fn query_param(key: &str) -> Option<String> {
++    let q = query();
++    let q = q.strip_prefix('?').unwrap_or(q.as_str());
++    for pair in q.split('&') {
++        let mut it = pair.splitn(2, '=');
++        if it.next() == Some(key) {
++            let raw = it.next().unwrap_or("");
++            let decoded =
++                js_sys::decode_uri_component(raw).ok().and_then(|v| v.as_string()).unwrap_or_else(|| raw.to_string());
++            return Some(decoded);
++        }
++    }
++    None
++}
++
++/// Fetch a document over the network (same-origin cookies included) for `?src=`. Returns
++/// `(name, bytes)`; the name decides the type the engine reads and the later Save name.
++async fn fetch_doc(url: &str, name_hint: Option<String>) -> Result<(String, Vec<u8>), String> {
++    let js = |e: wasm_bindgen::JsValue| format!("{e:?}");
++    let window = web_sys::window().ok_or("no window")?;
++    let resp_val = wasm_bindgen_futures::JsFuture::from(window.fetch_with_str(url)).await.map_err(js)?;
++    let resp: web_sys::Response = resp_val.dyn_into().map_err(|_| "not a Response".to_string())?;
++    if !resp.ok() {
++        return Err(format!("HTTP {}", resp.status()));
++    }
++    let buf = wasm_bindgen_futures::JsFuture::from(resp.array_buffer().map_err(js)?).await.map_err(js)?;
++    let bytes = js_sys::Uint8Array::new(&buf).to_vec();
++    let name = name_hint.unwrap_or_else(|| {
++        url.split('?').next().unwrap_or(url).rsplit('/').next().filter(|s| !s.is_empty()).unwrap_or("document").to_string()
++    });
++    Ok((name, bytes))
++}
++
++/// Write saved bytes back to Nextcloud over WebDAV (the `?save=` URL) with a PUT instead of a
++/// download. Same-origin cookies authorise the request; WebDAV is exempt from Nextcloud CSRF.
++fn put_back(url: &str, bytes: &[u8]) {
++    let url = url.to_string();
++    let body = js_sys::Uint8Array::from(bytes);
++    wasm_bindgen_futures::spawn_local(async move {
++        let Some(window) = web_sys::window() else { return };
++        let init = web_sys::RequestInit::new();
++        init.set_method("PUT");
++        init.set_body(body.as_ref());
++        init.set_credentials(web_sys::RequestCredentials::Include);
++        // Nextcloud requires a CSRF token for cookie-authenticated writes.
++        if let Some(token) = fetch_csrf_token(&window).await
++            && let Ok(h) = web_sys::Headers::new()
++        {
++            let _ = h.set("requesttoken", &token);
++            init.set_headers(h.as_ref());
++        }
++        let req = match web_sys::Request::new_with_str_and_init(&url, &init) {
++            Ok(r) => r,
++            Err(e) => {
++                log::error!("save request build failed: {e:?}");
++                return;
++            }
++        };
++        match wasm_bindgen_futures::JsFuture::from(window.fetch_with_request(&req)).await {
++            Ok(resp_val) => match resp_val.dyn_into::<web_sys::Response>() {
++                Ok(resp) if resp.ok() => log::info!("saved back to Nextcloud (HTTP {})", resp.status()),
++                Ok(resp) => log::error!("save PUT rejected: HTTP {}", resp.status()),
++                Err(_) => log::error!("save PUT: not a Response"),
++            },
++            Err(e) => log::error!("save PUT failed: {e:?}"),
++        }
++    });
++}
++
++/// Fetch a fresh Nextcloud CSRF token for the current session (same-origin, cookies included).
++async fn fetch_csrf_token(window: &web_sys::Window) -> Option<String> {
++    let init = web_sys::RequestInit::new();
++    init.set_credentials(web_sys::RequestCredentials::Include);
++    let req = web_sys::Request::new_with_str_and_init("/index.php/csrftoken", &init).ok()?;
++    let resp_val = wasm_bindgen_futures::JsFuture::from(window.fetch_with_request(&req)).await.ok()?;
++    let resp: web_sys::Response = resp_val.dyn_into().ok()?;
++    if !resp.ok() {
++        return None;
++    }
++    let text_val = wasm_bindgen_futures::JsFuture::from(resp.text().ok()?).await.ok()?;
++    let parsed = js_sys::JSON::parse(&text_val.as_string()?).ok()?;
++    js_sys::Reflect::get(&parsed, &wasm_bindgen::JsValue::from_str("token")).ok()?.as_string()
++}

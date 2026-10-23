@@ -1,0 +1,28 @@
+diff --git a/apps/gridcraft-web/index.html b/apps/gridcraft-web/index.html
+index 321aa30..38258fe 100644
+--- a/apps/gridcraft-web/index.html
++++ b/apps/gridcraft-web/index.html
+@@ -11,10 +11,22 @@
+     #gridcraft_canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+     #gridcraft_loading { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+       color: #555; font: 14px system-ui, sans-serif; pointer-events: none; }
++    #gridcraft_loading .wc-brand { font-weight: 600; font-size: 15px; color: #1f9d55; letter-spacing: .2px; }
++    #gridcraft_loading .wc-sub { margin-top: 4px; }
++    #wc_bar { width: 260px; max-width: 70vw; height: 6px; margin-top: 14px; background: #d6d6d6; border-radius: 999px; overflow: hidden; }
++    #wc_bar::before { content: ""; display: block; height: 100%; width: 40%; border-radius: 999px; background: #1f9d55; animation: wc-slide 1.1s ease-in-out infinite; }
++    @keyframes wc-slide { 0% { transform: translateX(-110%); } 100% { transform: translateX(275%); } }
++    #gridcraft_loading .wc-hint { margin-top: 10px; font-size: 12px; color: #8a8a8a; }
++    @media (prefers-color-scheme: dark) { html, body { background: #1e1e1e; } #gridcraft_loading { color: #bbb; } #wc_bar { background: #3a3a3a; } }
+   </style>
+ </head>
+ <body>
+   <canvas id="gridcraft_canvas"></canvas>
+-  <div id="gridcraft_loading">Loading GridCraft&hellip;</div>
++  <div id="gridcraft_loading">
++    <div class="wc-brand">GridCraft</div>
++    <div class="wc-sub">L&auml;dt&hellip;</div>
++    <div id="wc_bar"></div>
++    <div class="wc-hint">Erstes Laden kann kurz dauern &ndash; danach aus dem Cache.</div>
++  </div>
+ </body>
+ </html>

@@ -1,0 +1,191 @@
+diff --git a/apps/deckcraft-web/Cargo.toml b/apps/deckcraft-web/Cargo.toml
+index 7014421..4e67670 100644
+--- a/apps/deckcraft-web/Cargo.toml
++++ b/apps/deckcraft-web/Cargo.toml
+@@ -27,4 +27,4 @@ rfd = { workspace = true }
+ wasm-bindgen = "0.2"
+ wasm-bindgen-futures = "0.4"
+ js-sys = "0.3"
+-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "Location", "CssStyleDeclaration"] }
++web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "Location", "CssStyleDeclaration", "Request", "RequestInit", "RequestCredentials", "Response", "Headers"] }
+diff --git a/apps/deckcraft-web/index.html b/apps/deckcraft-web/index.html
+index b1834c3..5dea8af 100644
+--- a/apps/deckcraft-web/index.html
++++ b/apps/deckcraft-web/index.html
+@@ -11,10 +11,21 @@
+     #deckcraft_canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+     #deckcraft_loading { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+       color: #b8b8b8; font: 14px system-ui, sans-serif; pointer-events: none; }
++    #deckcraft_loading .wc-brand { font-weight: 600; font-size: 15px; color: #f08c00; letter-spacing: .2px; }
++    #deckcraft_loading .wc-sub { margin-top: 4px; }
++    #wc_bar { width: 260px; max-width: 70vw; height: 6px; margin-top: 14px; background: #3a3a3a; border-radius: 999px; overflow: hidden; }
++    #wc_bar::before { content: ""; display: block; height: 100%; width: 40%; border-radius: 999px; background: #f08c00; animation: wc-slide 1.1s ease-in-out infinite; }
++    @keyframes wc-slide { 0% { transform: translateX(-110%); } 100% { transform: translateX(275%); } }
++    #deckcraft_loading .wc-hint { margin-top: 10px; font-size: 12px; color: #8a8a8a; }
+   </style>
+ </head>
+ <body>
+   <canvas id="deckcraft_canvas"></canvas>
+-  <div id="deckcraft_loading">Loading DeckCraft&hellip;</div>
++  <div id="deckcraft_loading">
++    <div class="wc-brand">DeckCraft</div>
++    <div class="wc-sub">L&auml;dt&hellip;</div>
++    <div id="wc_bar"></div>
++    <div class="wc-hint">Erstes Laden kann kurz dauern &ndash; danach aus dem Cache.</div>
++  </div>
+ </body>
+ </html>
+diff --git a/apps/deckcraft-web/src/web.rs b/apps/deckcraft-web/src/web.rs
+index dabad8a..d9bec03 100644
+--- a/apps/deckcraft-web/src/web.rs
++++ b/apps/deckcraft-web/src/web.rs
+@@ -39,7 +39,25 @@ pub fn start() {
+                     let inbox: Inbox = Inbox::default();
+                     let mut app = SlideApp::new(Session::new(), services(inbox.clone(), cc.egui_ctx.clone()));
+                     let q = query();
+-                    if !q.contains("blank") {
++                    if let Some(src) = query_param("src") {
++                        // Nextcloud: fetch the presentation and open it through the same inbox a drop uses.
++                        let id = app.begin_external_file("src");
++                        let name = query_param("name").unwrap_or_else(|| src.rsplit('/').next().unwrap_or("deck.pptx").to_string());
++                        let inbox = inbox.clone();
++                        let ctx2 = cc.egui_ctx.clone();
++                        wasm_bindgen_futures::spawn_local(async move {
++                            match fetch_bytes(&src).await {
++                                Ok(bytes) => {
++                                    push_inbox(&inbox, InboxEvent::File(InboxFile { id, name, bytes }));
++                                    ctx2.request_repaint();
++                                }
++                                Err(e) => {
++                                    log::error!("?src load failed: {e}");
++                                    push_inbox(&inbox, InboxEvent::Cancelled { id });
++                                }
++                            }
++                        });
++                    } else if !q.contains("blank") {
+                         if let Err(e) = deckcraft_engine::sample::open_sample(&mut app.session) {
+                             log::error!("sample deck: {e}");
+                         }
+@@ -113,6 +131,10 @@ impl eframe::App for WebShell {
+ /// back to `open_async` (browser picker → inbox) and `download`.
+ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
+     let open_inbox = inbox.clone();
++    let save_url = query_param("save");
++    let src_name = query_param("name");
++    let (save_w, name_w) = (save_url.clone(), src_name.clone());
++    let (save_d, name_d) = (save_url, src_name);
+     Services {
+         open_async: Some(Box::new(move |purpose: &str, request: u64| {
+             let inbox = open_inbox.clone();
+@@ -134,8 +156,16 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
+                 ctx.request_repaint();
+             });
+         })),
+-        write: Some(Box::new(|name: &str, bytes: &[u8]| download(name, bytes))),
+-        download: Some(Box::new(|name: &str, bytes: &[u8]| {
++        write: Some(Box::new(move |name: &str, bytes: &[u8]| {
++            if save_back(&save_w, &name_w, name, bytes) {
++                return Ok(());
++            }
++            download(name, bytes)
++        })),
++        download: Some(Box::new(move |name: &str, bytes: &[u8]| {
++            if save_back(&save_d, &name_d, name, bytes) {
++                return;
++            }
+             if let Err(e) = download(name, bytes) {
+                 log::error!("download of {name} failed: {e}");
+             }
+@@ -188,3 +218,92 @@ fn mime_for(name: &str) -> &'static str {
+         _ => "application/octet-stream",
+     }
+ }
++
++
++/// A single query-string parameter from the page URL, URL-decoded (`?key=value`, first match).
++fn query_param(key: &str) -> Option<String> {
++    let q = query();
++    let q = q.strip_prefix('?').unwrap_or(q.as_str());
++    for pair in q.split('&') {
++        let mut it = pair.splitn(2, '=');
++        if it.next() == Some(key) {
++            let raw = it.next().unwrap_or("");
++            let decoded =
++                js_sys::decode_uri_component(raw).ok().and_then(|v| v.as_string()).unwrap_or_else(|| raw.to_string());
++            return Some(decoded);
++        }
++    }
++    None
++}
++
++/// Fetch bytes over the network (same-origin cookies included) for `?src=`.
++async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
++    let js = |e: wasm_bindgen::JsValue| format!("{e:?}");
++    let window = web_sys::window().ok_or("no window")?;
++    let resp_val = wasm_bindgen_futures::JsFuture::from(window.fetch_with_str(url)).await.map_err(js)?;
++    let resp: web_sys::Response = resp_val.dyn_into().map_err(|_| "not a Response".to_string())?;
++    if !resp.ok() {
++        return Err(format!("HTTP {}", resp.status()));
++    }
++    let buf = wasm_bindgen_futures::JsFuture::from(resp.array_buffer().map_err(js)?).await.map_err(js)?;
++    Ok(js_sys::Uint8Array::new(&buf).to_vec())
++}
++
++/// Write the primary save (same filename as the opened file) back to Nextcloud over WebDAV.
++fn save_back(save_url: &Option<String>, src_name: &Option<String>, name: &str, bytes: &[u8]) -> bool {
++    let base = std::path::Path::new(name).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
++    if let (Some(url), Some(sn)) = (save_url, src_name)
++        && &base == sn
++    {
++        put_back(url, bytes);
++        return true;
++    }
++    false
++}
++
++fn put_back(url: &str, bytes: &[u8]) {
++    let url = url.to_string();
++    let body = js_sys::Uint8Array::from(bytes);
++    wasm_bindgen_futures::spawn_local(async move {
++        let Some(window) = web_sys::window() else { return };
++        let init = web_sys::RequestInit::new();
++        init.set_method("PUT");
++        init.set_body(body.as_ref());
++        init.set_credentials(web_sys::RequestCredentials::Include);
++        if let Some(token) = fetch_csrf_token(&window).await
++            && let Ok(h) = web_sys::Headers::new()
++        {
++            let _ = h.set("requesttoken", &token);
++            init.set_headers(h.as_ref());
++        }
++        let req = match web_sys::Request::new_with_str_and_init(&url, &init) {
++            Ok(r) => r,
++            Err(e) => {
++                log::error!("save request build failed: {e:?}");
++                return;
++            }
++        };
++        match wasm_bindgen_futures::JsFuture::from(window.fetch_with_request(&req)).await {
++            Ok(resp_val) => match resp_val.dyn_into::<web_sys::Response>() {
++                Ok(resp) if resp.ok() => log::info!("saved back to Nextcloud (HTTP {})", resp.status()),
++                Ok(resp) => log::error!("save PUT rejected: HTTP {}", resp.status()),
++                Err(_) => log::error!("save PUT: not a Response"),
++            },
++            Err(e) => log::error!("save PUT failed: {e:?}"),
++        }
++    });
++}
++
++async fn fetch_csrf_token(window: &web_sys::Window) -> Option<String> {
++    let init = web_sys::RequestInit::new();
++    init.set_credentials(web_sys::RequestCredentials::Include);
++    let req = web_sys::Request::new_with_str_and_init("/index.php/csrftoken", &init).ok()?;
++    let resp_val = wasm_bindgen_futures::JsFuture::from(window.fetch_with_request(&req)).await.ok()?;
++    let resp: web_sys::Response = resp_val.dyn_into().ok()?;
++    if !resp.ok() {
++        return None;
++    }
++    let text_val = wasm_bindgen_futures::JsFuture::from(resp.text().ok()?).await.ok()?;
++    let parsed = js_sys::JSON::parse(&text_val.as_string()?).ok()?;
++    js_sys::Reflect::get(&parsed, &wasm_bindgen::JsValue::from_str("token")).ok()?.as_string()
++}
