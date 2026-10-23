@@ -1,0 +1,17 @@
+{
+    "name": "wordcraft-nc",
+    "version": "1.0.0",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "build": "node esbuild.mjs"
+    },
+    "dependencies": {
+        "@nextcloud/auth": "^2.6.0",
+        "@nextcloud/files": "^4.0.0",
+        "@nextcloud/router": "^3.1.0"
+    },
+    "devDependencies": {
+        "esbuild": "^0.24.0"
+    }
+}
