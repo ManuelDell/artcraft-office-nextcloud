@@ -2,12 +2,16 @@ import { registerFileAction, addNewFileMenuEntry, DefaultType } from '@nextcloud
 import { getCurrentUser } from '@nextcloud/auth'
 import BLANK_DOCX_B64 from './blank-docx.b64'
 import BLANK_XLSX_B64 from './blank-xlsx.b64'
+import BLANK_PPTX_B64 from './blank-pptx.b64'
 
 console.info('[wordcraft] script loaded')
 
 const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
 const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+const PPTX = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
 const OVERLAY_ID = 'wordcraft-overlay'
+// Editors are bundled inside this app and served from its own web root (self-contained).
+const EDITORS = ((window.OC && window.OC.appswebroots && window.OC.appswebroots.wordcraft) || '/apps/wordcraft') + '/editors'
 
 // WordCraft brand mark (blue document) — assets/app-icon/wordcraft.svg.
 const LOGO_WC = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">'
@@ -34,6 +38,15 @@ const LOGO_GC = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">'
     + '<rect x="244" y="250" width="80" height="46" fill="none" stroke-width="16"/>'
     + '<rect x="312" y="284" width="24" height="24" fill="#0b0b0c" stroke="#efe9dc" stroke-width="5"/>'
     + '<path d="M252 410 H316 M252 424 H316" stroke-width="7"/></g></g></svg>'
+
+// DeckCraft brand mark (amber slide on a stand).
+const LOGO_DC = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">'
+    + '<rect width="512" height="512" rx="112" fill="#f08c00"/>'
+    + '<rect x="104" y="120" width="304" height="200" rx="12" fill="#efe9dc" stroke="#0b0b0c" stroke-width="14"/>'
+    + '<g stroke="#0b0b0c" stroke-width="14" stroke-linecap="round"><line x1="150" y1="176" x2="300" y2="176"/>'
+    + '<line x1="150" y1="222" x2="362" y2="222"/><line x1="150" y1="268" x2="330" y2="268"/></g>'
+    + '<line x1="256" y1="320" x2="256" y2="366" stroke="#0b0b0c" stroke-width="14"/>'
+    + '<path d="M190 404 H322 L302 366 H210 Z" fill="#0b0b0c"/></svg>'
 
 const matches = (node, mime, ext) => {
     if (!node) { return false }
@@ -117,18 +130,20 @@ function openOverlay(src, wire) {
     if (wire) { cleanup = wire(iframe) || null }
 }
 
-// --- WordCraft (docx): URL mode — the editor fetches/saves over WebDAV itself ---
-function openWord(dav, name) {
+// --- URL mode (WordCraft/DeckCraft): the editor fetches/saves over WebDAV itself ---
+function openUrlEditor(base, dav, name) {
     const p = new URLSearchParams()
     p.set('src', dav); p.set('save', dav); p.set('name', name)
     const user = getCurrentUser()
     if (user && user.displayName) { p.set('user', user.displayName) }
-    openOverlay('/wordcraft/?' + p.toString())
+    openOverlay(base + '/?' + p.toString())
 }
+const openWord = (dav, name) => openUrlEditor(EDITORS + '/wordcraft', dav, name)
+const openDeck = (dav, name) => openUrlEditor(EDITORS + '/deckcraft', dav, name)
 
 // --- GridCraft (xlsx): postMessage bridge (?host=parent) ---
 function openGrid(dav, name) {
-    openOverlay('/gridcraft/?host=parent', (iframe) => {
+    openOverlay(EDITORS + '/gridcraft/?host=parent', (iframe) => {
         const onMsg = async (e) => {
             if (e.origin !== location.origin || e.source !== iframe.contentWindow) { return }
             const d = e.data || {}
@@ -165,6 +180,7 @@ function action(id, title, logo, mime, ext, open) {
 }
 action('wordcraft-open', 'In WordCraft öffnen', LOGO_WC, DOCX, 'docx', openWord)
 action('gridcraft-open', 'In GridCraft öffnen', LOGO_GC, XLSX, 'xlsx', openGrid)
+action('deckcraft-open', 'In DeckCraft öffnen', LOGO_DC, PPTX, 'pptx', openDeck)
 
 // --- "+ New" entries ---
 async function createAndOpen(folder, ext, mime, b64, open) {
@@ -187,5 +203,6 @@ function newEntry(id, title, logo, ext, mime, b64, open) {
 }
 newEntry('wordcraft-new', 'WordCraft-Dokument', LOGO_WC, 'docx', DOCX, BLANK_DOCX_B64, openWord)
 newEntry('gridcraft-new', 'GridCraft-Tabelle', LOGO_GC, 'xlsx', XLSX, BLANK_XLSX_B64, openGrid)
+newEntry('deckcraft-new', 'DeckCraft-Präsentation', LOGO_DC, 'pptx', PPTX, BLANK_PPTX_B64, openDeck)
 
-console.info('[wordcraft] registered word + grid (actions + new menu)')
+console.info('[wordcraft] registered word + grid + deck (actions + new menu)')

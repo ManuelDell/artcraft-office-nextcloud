@@ -4,7 +4,7 @@
     <name>WordCraft</name>
     <summary>Office-Dokumente mit WordCraft öffnen und bearbeiten</summary>
     <description>Öffnet Office-Dateien (docx) im gehosteten WordCraft-Editor — eingebettet oder im neuen Tab.</description>
-    <version>1.0.2</version>
+    <version>1.1.0</version>
     <licence>agpl</licence>
     <author>Dells Dienste</author>
     <namespace>WordCraft</namespace>
