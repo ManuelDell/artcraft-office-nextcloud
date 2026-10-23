@@ -1,5 +1,9 @@
-import { registerFileAction, DefaultType } from '@nextcloud/files'
+import { registerFileAction, addNewFileMenuEntry, DefaultType } from '@nextcloud/files'
 import { getCurrentUser } from '@nextcloud/auth'
+import BLANK_DOCX_B64 from './blank-docx.b64'
+import BLANK_XLSX_B64 from './blank-xlsx.b64'
+import BLANK_PPTX_B64 from './blank-pptx.b64'
+import BLANK_PDF_B64 from './blank-pdf.b64'
 
 console.info('[wordcraft] script loaded')
 
@@ -73,6 +77,13 @@ async function putBytes(url, body, mime) {
     const r = await fetch(url, { method: 'PUT', headers, body, credentials: 'same-origin' })
     if (!r.ok) { throw new Error('HTTP ' + r.status) }
 }
+function b64ToBytes(b64) {
+    const bin = atob(b64)
+    const arr = new Uint8Array(bin.length)
+    for (let i = 0; i < bin.length; i++) { arr[i] = bin.charCodeAt(i) }
+    return arr
+}
+
 function button(label, title) {
     const b = document.createElement('button')
     b.textContent = label
@@ -185,7 +196,28 @@ action('deckcraft-open', 'In DeckCraft öffnen', LOGO_DC, PPTX, 'pptx', openDeck
 // PDF: menu action only (not default-click), so the built-in NC PDF viewer stays the default.
 action('pdfcraft-open', 'In PdfCraft bearbeiten', LOGO_PDF, PDF, 'pdf', openPdf, false)
 
-// "+ New" is provided by the DirectEditing creators (lib/DirectEditing) — one set of entries
-// for web and clients. The file-open actions above stay as the embedded-overlay experience.
+// --- "+ New" entries ---
+async function createAndOpen(folder, ext, mime, b64, open) {
+    let name = window.prompt('Name des neuen Dokuments', 'Neues Dokument')
+    if (!name) { return }
+    name = name.replace(new RegExp('\\.' + ext + '$', 'i'), '') + '.' + ext
+    const url = (davOf(folder)).replace(/\/+$/, '') + '/' + encodeURIComponent(name)
+    try {
+        await putBytes(url, b64ToBytes(b64), mime)
+        open(url, name)
+    } catch (e) {
+        console.error('[wordcraft] create failed', e)
+        window.alert('Konnte das Dokument nicht anlegen: ' + e.message)
+    }
+}
+function newEntry(id, title, logo, ext, mime, b64, open) {
+    try {
+        addNewFileMenuEntry({ id, displayName: title, iconSvgInline: logo, order: 10, handler: (folder) => { createAndOpen(folder, ext, mime, b64, open) } })
+    } catch (e) { console.error('[wordcraft] addNewFileMenuEntry failed', id, e) }
+}
+newEntry('wordcraft-new', 'WordCraft-Dokument', LOGO_WC, 'docx', DOCX, BLANK_DOCX_B64, openWord)
+newEntry('gridcraft-new', 'GridCraft-Tabelle', LOGO_GC, 'xlsx', XLSX, BLANK_XLSX_B64, openGrid)
+newEntry('deckcraft-new', 'DeckCraft-Präsentation', LOGO_DC, 'pptx', PPTX, BLANK_PPTX_B64, openDeck)
+newEntry('pdfcraft-new', 'PDF-Dokument (PdfCraft)', LOGO_PDF, 'pdf', PDF, BLANK_PDF_B64, openPdf)
 
-console.info('[wordcraft] registered open actions: word + grid + deck + pdf')
+console.info('[wordcraft] registered word + grid + deck + pdf (actions + new menu)')
